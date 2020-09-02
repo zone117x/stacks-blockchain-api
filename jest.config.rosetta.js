@@ -9,7 +9,7 @@ module.exports = {
   coverageDirectory: '../coverage',
   globalSetup: '<rootDir>/tests-rosetta/setup.ts',
   globalTeardown: '<rootDir>/tests-rosetta/teardown.ts',
-  testTimeout: 20000,
+  testTimeout: 60000,
   transformIgnorePatterns: [
     "node_modules/(?!(@blockstack/stacks-transactions)/)"
   ]
