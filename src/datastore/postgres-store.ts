@@ -34,6 +34,7 @@ import {
   DataStoreUpdateData,
   DbFaucetRequestCurrency,
   DbMempoolTx,
+  DbMempoolTxId,
   DbSearchResult,
 } from './common';
 import { TransactionType } from '@blockstack/stacks-blockchain-api-types';
@@ -143,6 +144,11 @@ const MEMPOOL_TX_COLUMNS = `
   coinbase_payload
 `;
 
+const MEMPOOL_TX_ID_COLUMNS = `
+  -- required columns
+  tx_id
+`;
+
 const BLOCK_COLUMNS = `
   block_hash, index_block_hash, parent_index_block_hash, parent_block_hash, parent_microblock, block_height, burn_block_time, canonical
 `;
@@ -238,6 +244,9 @@ interface TxQueryResult {
   coinbase_payload?: Buffer;
 }
 
+interface MempoolTxIdQueryResult {
+  tx_id: Buffer;
+}
 interface FaucetRequestQueryResult {
   currency: string;
   ip: string;
@@ -720,7 +729,7 @@ export class PgDataStore extends (EventEmitter as { new (): DataStoreEventEmitte
     logger.verbose(`Entities marked as non-canonical: ${markedNonCanonical}`);
   }
 
-  static async connect(): Promise<PgDataStore> {
+  static async connect(skipMigrations = false): Promise<PgDataStore> {
     const clientConfig = getPgClientConfig();
 
     const initTimer = stopwatch();
@@ -752,7 +761,10 @@ export class PgDataStore extends (EventEmitter as { new (): DataStoreEventEmitte
       throw connectionError;
     }
 
-    await runMigrations(clientConfig);
+    if (!skipMigrations) {
+      await runMigrations(clientConfig);
+    }
+
     const pool = new Pool({
       ...clientConfig,
     });
@@ -827,6 +839,40 @@ export class PgDataStore extends (EventEmitter as { new (): DataStoreEventEmitte
     return { found: true, result: block } as const;
   }
 
+  async getBlockByHeight(block_height: number) {
+    const result = await this.pool.query<BlockQueryResult>(
+      `
+      SELECT ${BLOCK_COLUMNS}
+      FROM blocks
+      WHERE block_height = $1
+      `,
+      [block_height]
+    );
+    if (result.rowCount === 0) {
+      return { found: false } as const;
+    }
+    const row = result.rows[0];
+    const block = this.parseBlockQueryResult(row);
+    return { found: true, result: block } as const;
+  }
+
+  async getCurrentBlock() {
+    const result = await this.pool.query<BlockQueryResult>(
+      `
+      SELECT ${BLOCK_COLUMNS}
+      FROM blocks
+      ORDER BY  block_height DESC
+      LIMIT 1
+      `
+    );
+    if (result.rowCount === 0) {
+      return { found: false } as const;
+    }
+    const row = result.rows[0];
+    const block = this.parseBlockQueryResult(row);
+    return { found: true, result: block } as const;
+  }
+
   async getBlocks({ limit, offset }: { limit: number; offset: number }) {
     const totalQuery = this.pool.query<{ count: number }>(`
       SELECT COUNT(*)::integer
@@ -860,6 +906,23 @@ export class PgDataStore extends (EventEmitter as { new (): DataStoreEventEmitte
     );
     const txIds = result.rows.sort(tx => tx.tx_index).map(tx => bufferToHexPrefixString(tx.tx_id));
     return { results: txIds };
+  }
+
+  async getBlockTxsRows(indexBlockHash: string) {
+    const result = await this.pool.query<TxQueryResult>(
+      `
+      SELECT ${TX_COLUMNS}
+      FROM txs
+      WHERE block_hash = $1
+      `,
+      [hexToBuffer(indexBlockHash)]
+    );
+    if (result.rowCount === 0) {
+      return { found: false } as const;
+    }
+    const parsed = result.rows.map(r => this.parseTxQueryResult(r));
+
+    return { found: true, result: parsed };
   }
 
   async updateTx(client: ClientBase, tx: DbTx): Promise<number> {
@@ -1085,6 +1148,38 @@ export class PgDataStore extends (EventEmitter as { new (): DataStoreEventEmitte
     );
 
     const parsed = resultQuery.rows.map(r => this.parseMempoolTxQueryResult(r));
+    return { results: parsed, total: totalQuery.rows[0].count };
+  }
+
+  async getMempoolTxIdList({
+    limit,
+    offset,
+  }: {
+    limit: number;
+    offset: number;
+  }): Promise<{ results: DbMempoolTxId[]; total: number }> {
+    const totalQuery = await this.pool.query<{ count: number }>(
+      `
+      SELECT COUNT(*)::integer
+      FROM mempool_txs
+      `
+    );
+    const resultQuery = await this.pool.query<MempoolTxIdQueryResult>(
+      `
+      SELECT ${MEMPOOL_TX_ID_COLUMNS}
+      FROM mempool_txs
+      ORDER BY receipt_time DESC
+      LIMIT $1
+      OFFSET $2
+      `,
+      [limit, offset]
+    );
+    const parsed = resultQuery.rows.map(r => {
+      const tx: DbMempoolTxId = {
+        tx_id: bufferToHexPrefixString(r.tx_id),
+      };
+      return tx;
+    });
     return { results: parsed, total: totalQuery.rows[0].count };
   }
 
