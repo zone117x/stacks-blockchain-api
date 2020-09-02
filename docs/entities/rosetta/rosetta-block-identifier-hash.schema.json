@@ -1,0 +1,14 @@
+{
+  "$id": "rosetta-block-identifier-hash.schema.json",
+  "type": "object",
+  "title": "RosettaBlockIdentifierHash",
+  "description": "This is also known as the block hash.",
+  "required": ["hash"],
+  "additionalProperties": false,
+  "properties": {
+    "hash": {
+      "type": "string",
+      "description": "This is also known as the block hash."
+    }
+  }
+}
